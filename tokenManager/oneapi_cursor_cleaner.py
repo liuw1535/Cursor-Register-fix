@@ -7,16 +7,26 @@
 
 import argparse
 import concurrent.futures
+import os
+import yaml
 
 from oneapi_manager import OneAPIManager
 from cursor import Cursor
+
+# 读取配置文件
+def load_config():
+    config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'config', 'config.yaml')
+    if os.path.exists(config_path):
+        with open(config_path, 'r', encoding='utf-8') as f:
+            return yaml.safe_load(f)
+    return {}
 
 def handle_oneapi_cursor_channel(oneapi: OneAPIManager,
                                  channel_id,
                                  test_channel: bool,
                                  disable_low_balance_channel: bool, 
                                  delete_low_balance_channel: bool,
-                                 low_balance_threshold = 10):
+                                 low_balance_threshold = 50):
     if test_channel:
         test_response = oneapi.test_channel(channel_id)
         if test_response.status_code != 200:
@@ -42,7 +52,7 @@ def handle_oneapi_cursor_channel(oneapi: OneAPIManager,
     
     print(f"[OneAPI] Channel {channel_id} Info: Balance = {remaining_balance}. Trial Remaining Days = {remaining_days}. Response Time = {response_time}")
 
-    if remaining_balance < low_balance_threshold \
+    if remaining_balance <= low_balance_threshold \
         or (test_time != 0 and response_time < 1000): # or remaining_days <= 0:
         if delete_low_balance_channel:
             response = oneapi.delete_channel(channel_id)
@@ -52,14 +62,17 @@ def handle_oneapi_cursor_channel(oneapi: OneAPIManager,
             print(f"[OneAPI] Disable Channel {channel_id}. Status Code: {response.status_code}")
 
 if __name__ == "__main__":
-
+    config = load_config()
+    oneapi_config = config.get('oneapi', {})
+    default_threshold = oneapi_config.get('low_balance_threshold', 50)
+    
     parser = argparse.ArgumentParser()
     parser.add_argument('--oneapi_url', type=str, required=False, help='URL link for One-API website')
     parser.add_argument('--oneapi_token', type=str, required=False, help='Token for One-API website')
     parser.add_argument('--test_channel', default=False, type=lambda x: (str(x).lower() == 'true'))
     parser.add_argument('--disable_low_balance_accounts', default=False, type=lambda x: (str(x).lower() == 'true'))
     parser.add_argument('--delete_low_balance_accounts', default=False, type=lambda x: (str(x).lower() == 'true'))
-
+    parser.add_argument('--low_balance_threshold', type=int, default=default_threshold, help="Balance threshold for low balance accounts")
     parser.add_argument('--max_workers', type=int, default=10, help="How many workers in multi-threading")
 
     args = parser.parse_args()
@@ -68,6 +81,7 @@ if __name__ == "__main__":
     test_channel = args.test_channel
     disable_low_balance_accounts = args.disable_low_balance_accounts 
     delete_low_balance_accounts = args.delete_low_balance_accounts
+    low_balance_threshold = args.low_balance_threshold
     max_workers = args.max_workers
 
     oneapi = OneAPIManager(oneapi_url, oneapi_token)
@@ -80,7 +94,7 @@ if __name__ == "__main__":
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = [executor.submit(handle_oneapi_cursor_channel, 
-                                   oneapi, id, test_channel, disable_low_balance_accounts, delete_low_balance_accounts) 
+                                   oneapi, id, test_channel, disable_low_balance_accounts, delete_low_balance_accounts, low_balance_threshold) 
                                    for id in channels_ids]
         for future in concurrent.futures.as_completed(futures):
             result = future.result()

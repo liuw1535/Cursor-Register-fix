@@ -55,10 +55,17 @@ def register_cursor_core(register_config, options):
 
             usage = register.get_usage(user_id)
             balance = usage["gpt-4"]["maxRequestUsage"] - usage["gpt-4"]["numRequests"]
-            if balance < delete_low_balance_account_threshold:
+            if balance <= delete_low_balance_account_threshold:
+                print(f"[低余额检测] 账号余额({balance})小于等于阈值({delete_low_balance_account_threshold})，执行删除重注册流程")
                 register.delete_account()
-                tab_signin, status = register.sign_in(email_address)
-                token = register.get_cursor_cookie(tab_signin)
+                print("[低余额检测] 账号已删除，开始重新注册")
+                # 使用sign_up而不是sign_in来确保重新注册账号
+                tab_signup, status = register.sign_up(email_address)
+                token = register.get_cursor_cookie(tab_signup)
+                if token is not None:
+                    print("[低余额检测] 重新注册成功")
+                else:
+                    print("[低余额检测] 重新注册失败")
 
     if status or not enable_browser_log:
         register.browser.quit(force=True, del_data=True)
