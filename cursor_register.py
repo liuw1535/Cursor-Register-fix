@@ -3,11 +3,21 @@ import csv
 import copy
 import argparse
 import concurrent.futures
+import sys
 import hydra
 from faker import Faker
 from datetime import datetime
 from omegaconf import OmegaConf, DictConfig
 from DrissionPage import ChromiumOptions, Chromium
+
+# 设置控制台输出编码为UTF-8，避免中文字符编码问题
+if sys.stdout.encoding != 'utf-8':
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+    except AttributeError:
+        # Python 3.6及更早版本没有reconfigure方法
+        import io
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
 from temp_mails import Tempmail_io, Guerillamail_com
 from helper.cursor_register import CursorRegister
@@ -56,16 +66,16 @@ def register_cursor_core(register_config, options):
             usage = register.get_usage(user_id)
             balance = usage["gpt-4"]["maxRequestUsage"] - usage["gpt-4"]["numRequests"]
             if balance <= delete_low_balance_account_threshold:
-                print(f"[低余额检测] 账号余额({balance})小于等于阈值({delete_low_balance_account_threshold})，执行删除重注册流程")
+                print(f"[Low Balance] Account balance ({balance}) is less than or equal to threshold ({delete_low_balance_account_threshold}), executing delete and re-register")
                 register.delete_account()
-                print("[低余额检测] 账号已删除，开始重新注册")
+                print("[Low Balance] Account deleted, starting re-registration")
                 # 使用sign_up而不是sign_in来确保重新注册账号
                 tab_signup, status = register.sign_up(email_address)
                 token = register.get_cursor_cookie(tab_signup)
                 if token is not None:
-                    print("[低余额检测] 重新注册成功")
+                    print("[Low Balance] Re-registration successful")
                 else:
-                    print("[低余额检测] 重新注册失败")
+                    print("[Low Balance] Re-registration failed")
 
     if status or not enable_browser_log:
         register.browser.quit(force=True, del_data=True)

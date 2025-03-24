@@ -39,6 +39,8 @@ jobs:
     env:
       HIDE_ACCOUNT_INFO: "true"
       ENABLE_BROWSER_LOG: "false"
+      PYTHONIOENCODING: "utf-8"
+      PYTHONLEGACYWINDOWSSTDIO: "utf-8"
     steps:
       - uses: actions/checkout@v3
       - uses: actions/setup-python@v5
