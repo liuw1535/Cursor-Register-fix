@@ -305,19 +305,153 @@ class CursorRegister:
 
     def get_cursor_cookie(self, tab):
         try:
-            cookies = tab.cookies().as_dict()
-        except:
-            print(f"[Register][{self.thread_id}] Fail to get cookie.")
+            import secrets
+            import hashlib
+            import base64
+            import uuid
+            import threading
+            import requests
+            import time
+            from datetime import datetime
+
+            # 生成PKCE验证器和挑战码对
+            def generate_pkce_pair():
+                """生成PKCE验证器和挑战码对，用于OAuth 2.0 PKCE流程"""
+                # 生成一个安全的随机码作为验证器
+                code_verifier = secrets.token_urlsafe(43)  # 43字符长度会产生一个足够长的verifier
+
+                # 计算挑战码 (code_challenge)
+                code_challenge_digest = hashlib.sha256(code_verifier.encode('utf-8')).digest()
+                code_challenge = base64.urlsafe_b64encode(code_challenge_digest).decode('utf-8').rstrip('=')
+
+                return code_verifier, code_challenge
+
+            # 轮询API获取cookie的函数
+            def poll_for_cookie(uuid_str, verifier, stop_event):
+                """持续轮询API获取cookie，直到获取成功或手动停止"""
+                api_url = f"https://api2.cursor.sh/auth/poll?uuid={uuid_str}&verifier={verifier}"
+
+                # 简化的请求头部
+                headers = {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.6834.210 Safari/537.36",
+                    "Accept": "*/*",
+                    "Origin": "vscode-file://vscode-app",
+                    "x-ghost-mode": "true"
+                }
+
+                attempt = 0
+                print(f"[Register][{self.thread_id}] Starting API polling for cookie...")
+
+                while not stop_event.is_set():
+                    attempt += 1
+                    try:
+                        print(f"[Register][{self.thread_id}] Attempt #{attempt}...")
+
+                        # 直接发送GET请求获取cookie
+                        response = requests.get(api_url, headers=headers, timeout=5)
+
+                        if response.status_code == 200:
+                            data = response.json()
+
+                            if 'accessToken' in data:
+                                token = data['accessToken']
+                                print(f"[Register][{self.thread_id}] Successfully obtained Cookie!")
+                                return token
+                        else:
+                            print(f"[Register][{self.thread_id}] Attempt #{attempt}: Request failed, status code: {response.status_code}")
+                    except requests.exceptions.Timeout:
+                        print(f"[Register][{self.thread_id}] Attempt #{attempt}: Request timed out")
+                    except Exception as e:
+                        print(f"[Register][{self.thread_id}] Attempt #{attempt}: Exception - {e}")
+
+                    time.sleep(1)  # 每秒轮询一次
+
+                print(f"[Register][{self.thread_id}] Polling stopped")
+                return None
+
+            # 使用PKCE流程生成UUID、验证器和挑战码
+            uuid_str = str(uuid.uuid4())
+            verifier, challenge = generate_pkce_pair()
+            
+            # 生成确认页面URL
+            confirm_url = f"https://www.cursor.com/cn/loginDeepControl?challenge={challenge}&uuid={uuid_str}&mode=login"
+            
+            print(f"[Register][{self.thread_id}] Confirmation page URL: {confirm_url}")
+            
+            # 创建停止事件
+            stop_event = threading.Event()
+            
+            # 在新线程中开始轮询
+            poll_thread = threading.Thread(target=poll_for_cookie, args=(uuid_str, verifier, stop_event))
+            poll_thread.daemon = True
+            poll_thread.start()
+            
+            # 打开确认页面
+            tab.get(confirm_url)
+            
+            # 等待"Yes, Log In"按钮加载并点击
+            try:
+                # 根据页面等待按钮加载
+                if tab.wait.eles_loaded("xpath=//span[contains(text(), 'Yes, Log In')]", timeout=15):
+                    # 点击按钮
+                    tab.ele("xpath=//span[contains(text(), 'Yes, Log In')]").click()
+                    print(f"[Register][{self.thread_id}] Confirmation button clicked")
+                elif tab.wait.eles_loaded("xpath=//button[contains(@class, 'relative inline-flex')]//span[contains(text(), 'Yes, Log In')]", timeout=5):
+                    # 尝试使用更精确的XPath定位方式
+                    tab.ele("xpath=//button[contains(@class, 'relative inline-flex')]//span[contains(text(), 'Yes, Log In')]").click()
+                    print(f"[Register][{self.thread_id}] Confirmation button clicked through alternative method")
+                else:
+                    print(f"[Register][{self.thread_id}] Confirmation button not found")
+                    stop_event.set()
+                    return None
+            except Exception as e:
+                print(f"[Register][{self.thread_id}] Error clicking confirmation button: {e}")
+                stop_event.set()
+                return None
+            
+            # 等待轮询线程完成(最多等待20秒)
+            poll_thread.join(20)
+            
+            # 如果线程仍在运行，则停止它
+            if poll_thread.is_alive():
+                stop_event.set()
+                print(f"[Register][{self.thread_id}] Polling timeout")
+                return None
+            
+            # 获取结果
+            token = None
+            for _ in range(5):  # 尝试5次
+                try:
+                    # 直接发送GET请求获取cookie
+                    api_url = f"https://api2.cursor.sh/auth/poll?uuid={uuid_str}&verifier={verifier}"
+                    headers = {
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.6834.210 Safari/537.36",
+                        "Accept": "*/*",
+                        "Origin": "vscode-file://vscode-app",
+                        "x-ghost-mode": "true"
+                    }
+                    response = requests.get(api_url, headers=headers, timeout=5)
+                    
+                    if response.status_code == 200:
+                        data = response.json()
+                        if 'accessToken' in data:
+                            token = data['accessToken']
+                            break
+                except Exception as e:
+                    print(f"[Register][{self.thread_id}] Error getting final result: {e}")
+                time.sleep(1)
+            
+            if enable_register_log:
+                if token is not None:
+                    print(f"[Register][{self.thread_id}] Successfully obtained OAuth Token!")
+                else:
+                    print(f"[Register][{self.thread_id}] Failed to get OAuth Token!")
+
+            return token
+            
+        except Exception as e:
+            print(f"[Register][{self.thread_id}] Exception while getting cookie: {e}")
             return None
-
-        token = cookies.get('WorkosCursorSessionToken', None)
-        if enable_register_log:
-            if token is not None:
-                print(f"[Register][{self.thread_id}] Get Account Cookie Successfully.")
-            else:
-                print(f"[Register][{self.thread_id}] Get Account Cookie Failed.")
-
-        return token
 
     def _cursor_turnstile(self, tab, retry_times = 5):
         for retry in range(retry_times): # Retry times
